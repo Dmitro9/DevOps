@@ -9,7 +9,10 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Serve static files via non-root Nginx
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM nginxinc/nginx-unprivileged:alpine AS runner
+USER root
+RUN apk upgrade --no-cache
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html
 

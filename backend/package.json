@@ -4,16 +4,21 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/validation.test.js"
   },
   "dependencies": {
     "express": "^4.21.1",
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.15.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
-    "typescript": "^5.7.2"
+    "eslint": "^9.15.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.15.0"
   }
 }
