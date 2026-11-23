@@ -241,5 +241,39 @@ flowchart TB
 * **Ізоляція бази даних:** мережа `backend-net` налаштована з параметром `internal: true` — база даних недоступна напряму ззовні та з контейнера Frontend.
 * **Архітектурна документація:** обґрунтування вибору базових образів Alpine і стратегії сегментації мереж зафіксовано у [ADR 0003](docs/adr/adr_0003.md).
 
+---
+
+# Лабораторна робота №3: Безперервна інтеграція (CI) та контроль якості коду
+
+**Мета:** автоматизувати перевірку якості й безпеки коду (Quality Gates), налаштувати CI-конвеєр у GitHub Actions та організувати публікацію незмінних Docker-образів порталу **StudShare** у реєстр контейнерів GHCR.
+
+## Стратегія розгалуження та захист `main`
+
+* **Модель:** **GitHub Flow** — основна гілка `main` завжди залишається стабільною, а всі зміни виконуються у короткоживучих гілках (`feat/*`, `fix/*`, `docs/*`) і вливаються через Pull Request.
+* **Branch Protection Rules для `main`:**
+  * Заборона прямого пушу (`Direct Push`) — зміни потрапляють лише через Pull Request.
+  * Обов'язкова наявність мінімум 1 схвалення (*Approve*).
+  * Обов'язкове успішне проходження всіх 5 перевірок CI (*Status Checks*): `Lint Code & Dockerfiles`, `Run Tests & Verify Builds`, `Security Scan (Dependencies & Configs)`, `Build, Scan & Push (backend)`, `Build, Scan & Push (frontend)`.
+
+## Структура CI-пайплайну (`.github/workflows/ci.yml`)
+
+| Етап (Stage) | Джоба (Job) | Інструменти та перевірки | Принцип Fail Fast |
+| :--- | :--- | :--- | :--- |
+| **1. Linting** | `Lint Code & Dockerfiles` | **ESLint** (Backend TS + Frontend React), **Hadolint** (обидва `Dockerfile`), кешування `npm` | Помилка стилю або `warning` у Dockerfile зупиняє конвеєр |
+| **2. Testing** | `Run Tests & Verify Builds` | Модульні тести Backend (`node --test`), перевірка збірки Frontend (`vite build`), кешування `npm` | Падіння будь-якого тесту блокує збірку образів |
+| **3. DevSecOps (SCA)** | `Security Scan (Dependencies & Configs)` | **Trivy** (`fs`-сканування репозиторію та залежностей на CVE) | Наявність виправлених `CRITICAL` CVE завершує етап з помилкою |
+| **4. Build & Package** | `Build, Scan & Push (backend / frontend)` | **Docker Buildx**, **Trivy** (сканування зібраного образу), тегування `sha-<GIT_SHA>` / `SemVer`, публікація в **GHCR** | Публікація виконується лише після успішного сканування образу та злиття в `main` |
+
+## Артефакти та документація
+
+* **Реєстр контейнерів (GHCR):**
+  * `ghcr.io/dmitro9/studshare-backend:sha-<7-символів-коміту>`
+  * `ghcr.io/dmitro9/studshare-frontend:sha-<7-символів-коміту>`
+* **Локальний запуск тестів і лінтерів:**
+  ```bash
+  cd backend && npm install && npm run lint && npm test
+  cd ../frontend && npm install && npm run lint && npm run build
+
+* **Архітектурне рішення:** вибір GitHub Actions + GHCR, політика Quality Gates і стратегія версіонування зафіксовані у ADR 0004.
 
 
