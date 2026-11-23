@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import { Pool } from "pg";
+import { validateMaterial } from "./validation";
 
 const port = Number(process.env.PORT) || 3000;
 
@@ -49,11 +50,13 @@ app.get("/api/materials", async (_req: Request, res: Response) => {
 });
 
 app.post("/api/materials", async (req: Request, res: Response) => {
-  const { title, subject, category, author } = req.body;
-  if (!title || !subject || !category || !author) {
-    res.status(400).json({ error: "All fields are required" });
+  const validation = validateMaterial(req.body);
+  if (!validation.valid || !validation.data) {
+    res.status(400).json({ error: validation.error });
     return;
   }
+
+  const { title, subject, category, author } = validation.data;
 
   try {
     const result = await pool.query(
