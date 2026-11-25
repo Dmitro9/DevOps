@@ -28,6 +28,7 @@
         - "22"
         - "80"
         - "443"
+        - "3000"
 
     - name: Enable UFW with default deny incoming policy
       community.general.ufw:

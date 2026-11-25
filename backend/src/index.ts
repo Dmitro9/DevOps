@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import { Pool } from "pg";
 import { validateMaterial } from "./validation";
 
@@ -14,6 +14,66 @@ const pool = new Pool({
 
 const app = express();
 app.use(express.json());
+
+// Prometheus RED metrics (Rate, Errors, Duration)
+const httpRequestsTotal = new Map<string, number>();
+const durationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
+const bucketCounts = new Array<number>(durationBuckets.length).fill(0);
+let durationSum = 0;
+let durationCount = 0;
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === "/metrics") {
+    next();
+    return;
+  }
+  const startNs = process.hrtime.bigint();
+  res.on("finish", () => {
+    const durationSec = Number(process.hrtime.bigint() - startNs) / 1e9;
+    const key = `${req.method}|${req.path}|${res.statusCode}`;
+    httpRequestsTotal.set(key, (httpRequestsTotal.get(key) ?? 0) + 1);
+
+    durationSum += durationSec;
+    durationCount += 1;
+    for (let i = 0; i < durationBuckets.length; i += 1) {
+      if (durationSec <= durationBuckets[i]) {
+        bucketCounts[i] += 1;
+      }
+    }
+  });
+  next();
+});
+
+app.get("/metrics", (_req: Request, res: Response) => {
+  const lines: string[] = [
+    "# HELP http_requests_total Total number of HTTP requests",
+    "# TYPE http_requests_total counter",
+  ];
+
+  httpRequestsTotal.forEach((count, key) => {
+    const [method, route, status] = key.split("|");
+    lines.push(`http_requests_total{method="${method}",route="${route}",status="${status}"} ${count}`);
+  });
+
+  lines.push(
+    "# HELP http_request_duration_seconds HTTP request latency in seconds",
+    "# TYPE http_request_duration_seconds histogram"
+  );
+  for (let i = 0; i < durationBuckets.length; i += 1) {
+    lines.push(`http_request_duration_seconds_bucket{le="${durationBuckets[i]}"} ${bucketCounts[i]}`);
+  }
+  lines.push(`http_request_duration_seconds_bucket{le="+Inf"} ${durationCount}`);
+  lines.push(`http_request_duration_seconds_sum ${durationSum.toFixed(6)}`);
+  lines.push(`http_request_duration_seconds_count ${durationCount}`);
+  lines.push(
+    "# HELP process_uptime_seconds Node.js process uptime in seconds",
+    "# TYPE process_uptime_seconds gauge",
+    `process_uptime_seconds ${process.uptime().toFixed(2)}`
+  );
+
+  res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  res.status(200).send(`${lines.join("\n")}\n`);
+});
 
 async function initDatabase(): Promise<void> {
   await pool.query(`
@@ -78,7 +138,6 @@ async function start(): Promise<void> {
     console.log(`StudShare Backend API listening on port ${port}`);
   });
 
-  // 12-Factor IX (Disposability): коректне завершення роботи на SIGTERM/SIGINT
   const shutdown = (signal: string) => {
     console.log(`Received ${signal}. Closing HTTP server and DB pool...`);
     server.close(async () => {
