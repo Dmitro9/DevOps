@@ -1,4 +1,4 @@
-name: StudShare CI Pipeline
+name: StudShare CI/CD Pipeline
 
 on:
   push:
@@ -188,3 +188,78 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # 5. Continuous Deployment & Post-Deploy Smoke Test
+  deploy:
+    name: Deploy to Azure VM & Smoke Test
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Transfer compose & monitoring configs to server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          scp -o StrictHostKeyChecking=no docker-compose.prod.yml "$SERVER_USER@$SERVER_HOST:/opt/studshare/app/"
+          scp -o StrictHostKeyChecking=no -r monitoring "$SERVER_USER@$SERVER_HOST:/opt/studshare/app/"
+
+      - name: Deploy containers on Azure VM via SSH
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          SHORT_SHA: ${{ github.sha }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+        run: |
+          OWNER_LOWER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG="sha-${SHORT_SHA:0:7}"
+
+          ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_HOST" "
+            set -e
+            cd /opt/studshare/app
+            printf '%s\n' \
+              'GITHUB_OWNER=$OWNER_LOWER' \
+              'IMAGE_TAG=$IMAGE_TAG' \
+              'POSTGRES_USER=$POSTGRES_USER' \
+              'POSTGRES_PASSWORD=$POSTGRES_PASSWORD' \
+              'POSTGRES_DB=$POSTGRES_DB' \
+              'BACKEND_PORT=3000' \
+              'GRAFANA_USER=admin' \
+              'GRAFANA_PASSWORD=$GRAFANA_PASSWORD' > .env
+            echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+          "
+
+      - name: Post-Deploy Smoke Test (HTTP 200 OK)
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          echo "Running smoke test against http://$SERVER_HOST/healthz ..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$SERVER_HOST/healthz" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed! Application is healthy (HTTP 200 OK)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Smoke test failed! Expected HTTP 200 OK."
+          exit 1

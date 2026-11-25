@@ -1,8 +1,15 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     container_name: studshare-db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -19,11 +26,10 @@ services:
       start_period: 10s
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_OWNER}/studshare-backend:${IMAGE_TAG}
     container_name: studshare-backend
     restart: unless-stopped
+    logging: *default-logging
     environment:
       PORT: ${BACKEND_PORT:-3000}
       DB_HOST: db
@@ -37,6 +43,7 @@ services:
     networks:
       - backend-net
       - frontend-net
+      - monitoring-net
     healthcheck:
       test:
         [
@@ -51,13 +58,12 @@ services:
       start_period: 10s
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_OWNER}/studshare-frontend:${IMAGE_TAG}
     container_name: studshare-frontend
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${FRONTEND_PORT:-8080}:8080"
+      - "80:8080"
     depends_on:
       backend:
         condition: service_healthy
@@ -70,8 +76,75 @@ services:
       retries: 3
       start_period: 5s
 
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: studshare-prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring-net
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: studshare-node-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - monitoring-net
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: studshare-cadvisor
+    restart: unless-stopped
+    logging: *default-logging
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring-net
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: studshare-grafana
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+
 volumes:
   pg_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   frontend-net:
@@ -79,3 +152,5 @@ networks:
   backend-net:
     driver: bridge
     internal: true
+  monitoring-net:
+    driver: bridge
