@@ -1,4 +1,4 @@
-# Лабораторна робота №1: Аналіз, вимоги, життєвий цикл та архітектурне бачення
+﻿# Лабораторна робота №1: Аналіз, вимоги, життєвий цикл та архітектурне бачення
 **Проєкт:** StudShare — Студентський портал для централізованого обміну навчальними матеріалами, конспектами та прикладами лабораторних робіт.
 
 ---
@@ -243,7 +243,7 @@ flowchart TB
 
 ---
 
-# Лабораторна робота №3: Безперервна інтеграція (CI) та контроль якості коду
+## Лабораторна робота №3: Безперервна інтеграція (CI) та контроль якості коду
 
 **Мета:** автоматизувати перевірку якості й безпеки коду (Quality Gates), налаштувати CI-конвеєр у GitHub Actions та організувати публікацію незмінних Docker-образів порталу **StudShare** у реєстр контейнерів GHCR.
 
@@ -295,3 +295,36 @@ terraform apply
 # 2. Конфігурація сервера через Ansible
 cd ../ansible
 ansible-playbook playbook.yml
+```
+## Лабораторна робота №5 Безперервне розгортання (CD) та Обсервабіліті (Моніторинг і Логування)
+
+1. **Налаштовано безперервне розгортання (CD) у GitHub Actions (`.github/workflows/ci.yml`):**
+   - Додано фінальний етап **`Deploy to Azure VM & Smoke Test`**, який автоматично запускається після злиття Pull Request у захищену гілку `main`.
+   - Реалізовано безпечну передачу `docker-compose.prod.yml` та конфігурацій моніторингу (`monitoring/`) на хмарний сервер через `scp` із використанням GitHub Actions Secrets (`SERVER_HOST`, `SSH_PRIVATE_KEY`, `POSTGRES_*`, `GRAFANA_PASSWORD`).
+   - Налаштовано генерацію `.env` із незмінним тегом образу `sha-<short_sha>` із **GitHub Container Registry (GHCR)** та автоматичне оновлення контейнерів (`docker compose -f docker-compose.prod.yml pull && up -d --remove-orphans`).
+   - Реалізовано автоматичний **Post-Deploy Smoke Test**, який перевіряє доступність розгорнутого застосунку за ендпоінтом `/healthz` (очікуваний статус `HTTP 200 OK`).
+
+2. **Інструментовано бекенд та розгорнуто стек спостережуваності (Observability):**
+   - У `backend/src/index.ts` додано ендпоінт **`/metrics`** у форматі Prometheus для експорту лічильників HTTP-запитів (`http_requests_total`), статусів відповідей та гістограми затримок (`http_request_duration_seconds`).
+   - У `docker-compose.prod.yml` піднято ізольовану мережу `monitoring-net` зі стеком моніторингу:
+     - **Prometheus (`v2.55.1`)** — збір метрик із `studshare-backend:3000`, `node-exporter:9100`, `cadvisor:8080` та `localhost:9090`.
+     - **Node Exporter (`v1.8.2`)** — моніторинг ресурсів хостової ОС (CPU, RAM, Disk I/O, Network).
+     - **cAdvisor (`v0.49.1`)** — моніторинг споживання CPU та пам'яті Docker-контейнерами.
+     - **Grafana (`11.3.0`)** — візуалізація метрик із автоматичним провіжинінгом джерела даних Prometheus.
+   - Для всіх 7 контейнерів налаштовано ротацію журналів Docker (`driver: json-file`, `max-size: 10m`, `max-file: 3`).
+
+3. **Створено дашборди в Grafana:**
+   - Імпортовано інфраструктурний дашборд **Node Exporter Full** (ID `1860`) для контролю навантаження віртуальної машини Azure.
+   - Створено власний дашборд **StudShare Containers & RED**, який відображає утилізацію CPU і RAM контейнерів (`cAdvisor`) та показники роботи сервісу за методологією **RED**:
+     - **Rate:** інтенсивність запитів (`sum(rate(http_requests_total[1m]))`).
+     - **Errors:** частота помилок HTTP 5xx (`sum(rate(http_requests_total{status=~"5.."}[1m])) or vector(0)`).
+     - **Duration:** 95-й перцентиль затримки відповідей (`histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))`).
+
+4. **Налаштовано Alerting у Telegram та проведено симуляцію збою:**
+   - Підключено канал сповіщень **Telegram Alerts** через Telegram Bot API.
+   - Створено правило тривоги **`StudShare Backend Down`** (`up{job="studshare-backend"} < 1`, інтервал перевірки `10s`, Pending period `30s`).
+   - Проведено тестування відмовостійкості: виконано зупинку контейнера (`docker stop studshare-backend`), зафіксовано перехід правила у стан **`Firing`** у Grafana та отримано сповіщення про інцидент у Telegram, після чого роботу сервісу відновлено (`docker start studshare-backend`).
+
+5. **Задокументовано рішення та очищено хмарні ресурси:**
+   - Оформлено запис архітектурного рішення [ADR-0006](docs/adr/adr_0006.md).
+   - Після завершення перевірок усі хмарні ресурси в Microsoft Azure видалено командою `terraform destroy`.
