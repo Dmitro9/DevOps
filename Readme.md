@@ -276,4 +276,22 @@ flowchart TB
 
 * **Архітектурне рішення:** вибір GitHub Actions + GHCR, політика Quality Gates і стратегія версіонування зафіксовані у ADR 0004.
 
+## Лабораторна робота №4: Інфраструктура та автоматизація (IaC: Terraform + Ansible)
 
+Для відтворюваного розгортання середовища застосунку **StudShare** у хмарі **Microsoft Azure** (регіон `denmarkeast`, VM `Standard_B2als_v2`, Ubuntu 22.04 LTS) реалізовано підхід Infrastructure as Code та Configuration Management:
+
+- **`terraform/`** — декларативний опис хмарної інфраструктури (`providers.tf`, `variables.tf`, `main.tf`, `outputs.tf`): створення Resource Group, VNet, Subnet, NSG (відкриті порти `22`, `80`, `443`), Public IP, NIC та віртуальної машини з RSA SSH-автентифікацією.
+- **`ansible/`** — ідемпотентна конфігурація сервера (`ansible.cfg`, `inventory.ini`, `playbook.yml`): оновлення пакетів ОС, налаштування фаєрволу `ufw`, встановлення Docker Engine і Docker Compose plugin, додавання користувача до групи `docker` та створення каталогів `/opt/studshare/{app,data,nginx}`.
+- **`docs/adr/adr_0005.md`** — архітектурне рішення (ADR) щодо вибору провайдера, розподілу відповідальності між Terraform та Ansible і політики зберігання стану `terraform.tfstate`.
+
+### Швидкий запуск
+
+```bash
+# 1. Розгортання інфраструктури в Azure
+cd terraform
+terraform init
+terraform apply
+
+# 2. Конфігурація сервера через Ansible
+cd ../ansible
+ansible-playbook playbook.yml
